@@ -127,6 +127,16 @@ Invoke-RestMethod -Method Get -Uri http://localhost:3001/auth/me `
 - Score is guess-based (fewer guesses means higher points), not fixed increments.
 - Leaderboard returns the top 10 players sorted by score.
 
+## Game Screenshots
+
+Initial game state (empty board):
+
+![Initial game state with empty board](GameScreenShots/Capture%20Etat%20Initale.png)
+
+Winning game state (player won):
+
+![Winning game state](GameScreenShots/Capture%20Winning.png)
+
 ## Security Defaults Added
 
 - `.env`-driven configuration for secrets and origins.
