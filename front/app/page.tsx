@@ -1,8 +1,11 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { type ChangeEvent, type KeyboardEvent, useState } from "react";
+import { useEffect } from "react";
 
 export default function Home() {
+  const router = useRouter();
   const rowSize = 6;
   const totalCells = 36;
   const totalRows = totalCells / rowSize;
@@ -23,8 +26,58 @@ export default function Home() {
   const [target, setTarget] = useState(() =>
     Math.floor(Math.random() * 1000000).toString().padStart(6, "0"),
   );
+  const [isAuthorized, setIsAuthorized] = useState(false);
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+
+  useEffect(() => {
+    const checkAuth = async () => {
+      const token = localStorage.getItem("numble_token");
+      if (!token) {
+        router.replace("/login");
+        return;
+      }
+
+      const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
+
+      try {
+        const response = await fetch(`${apiBaseUrl}/auth/me`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+
+        if (!response.ok) {
+          localStorage.removeItem("numble_token");
+          router.replace("/login");
+          return;
+        }
+
+        setIsAuthorized(true);
+      } catch {
+        localStorage.removeItem("numble_token");
+        router.replace("/login");
+      } finally {
+        setIsCheckingAuth(false);
+      }
+    };
+
+    checkAuth();
+  }, [router]);
 
   const isGameOver = hasWon || submittedRows.every(Boolean);
+
+  if (isCheckingAuth) {
+    return (
+      <div className="main-layout">
+        <h1>NUMBLE</h1>
+        <p className="game-status">Checking authentication...</p>
+      </div>
+    );
+  }
+
+  if (!isAuthorized) {
+    return null;
+  }
 
   const resetGame = () => {
     setValues(Array(totalCells).fill(""));
