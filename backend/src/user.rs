@@ -464,3 +464,206 @@ fn read_leaderboard(db: &sled::Db) -> Result<Vec<LeaderboardEntry>, AuthError> {
     entries.truncate(10);
     Ok(entries)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{
+        Router,
+        body::{Body, to_bytes},
+        http::{Method, Request, StatusCode},
+        routing::{get, post},
+    };
+    use serde_json::{Value, json};
+    use tempfile::TempDir;
+    use tower::ServiceExt;
+
+    fn test_app() -> (Router, TempDir) {
+        let tmp_dir = TempDir::new().expect("failed to create temp dir");
+        let db_path = tmp_dir
+            .path()
+            .join("users_db")
+            .to_string_lossy()
+            .to_string();
+
+        let state = AppState::new("test-secret".to_string(), db_path)
+            .expect("failed to create app state");
+
+        let app = Router::new()
+            .route("/auth/register", post(register))
+            .route("/auth/login", post(login))
+            .route("/auth/me", get(me))
+            .route("/scores/record", post(record_score))
+            .route("/scores/leaderboard", get(leaderboard))
+            .with_state(state);
+
+        (app, tmp_dir)
+    }
+
+    async fn request_json(
+        app: &Router,
+        method: Method,
+        uri: &str,
+        body: Value,
+        auth: Option<&str>,
+    ) -> (StatusCode, Value) {
+        let mut request_builder = Request::builder().method(method).uri(uri);
+
+        if let Some(token) = auth {
+            request_builder = request_builder.header(AUTHORIZATION, format!("Bearer {token}"));
+        }
+
+        let request = request_builder
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .expect("failed to build request");
+
+        let response = app
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("request failed");
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("failed to read body");
+        let payload = serde_json::from_slice::<Value>(&bytes).expect("invalid json response");
+
+        (status, payload)
+    }
+
+    async fn request_no_body(app: &Router, method: Method, uri: &str) -> (StatusCode, Value) {
+        let request = Request::builder()
+            .method(method)
+            .uri(uri)
+            .body(Body::empty())
+            .expect("failed to build request");
+
+        let response = app
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("request failed");
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("failed to read body");
+        let payload = serde_json::from_slice::<Value>(&bytes).expect("invalid json response");
+
+        (status, payload)
+    }
+
+    #[tokio::test]
+    async fn auth_and_score_flow_works() {
+        let (app, _tmp_dir) = test_app();
+
+        let (register_status, register_payload) = request_json(
+            &app,
+            Method::POST,
+            "/auth/register",
+            json!({"username":"alice","password":"password123"}),
+            None,
+        )
+        .await;
+        assert_eq!(register_status, StatusCode::CREATED);
+
+        let token = register_payload
+            .get("access_token")
+            .and_then(Value::as_str)
+            .expect("missing access token");
+
+        let (me_status, me_payload) = request_json(&app, Method::GET, "/auth/me", json!({}), Some(token)).await;
+        assert_eq!(me_status, StatusCode::OK);
+        assert_eq!(me_payload["username"], "alice");
+        assert_eq!(me_payload["score"], 0);
+
+        let (win_status, win_payload) = request_json(
+            &app,
+            Method::POST,
+            "/scores/record",
+            json!({"won": true}),
+            Some(token),
+        )
+        .await;
+        assert_eq!(win_status, StatusCode::OK);
+        assert_eq!(win_payload["score"], 10);
+        assert_eq!(win_payload["wins"], 1);
+
+        let (loss_status, loss_payload) = request_json(
+            &app,
+            Method::POST,
+            "/scores/record",
+            json!({"won": false}),
+            Some(token),
+        )
+        .await;
+        assert_eq!(loss_status, StatusCode::OK);
+        assert_eq!(loss_payload["score"], 12);
+        assert_eq!(loss_payload["wins"], 1);
+        assert_eq!(loss_payload["losses"], 1);
+        assert_eq!(loss_payload["games_played"], 2);
+    }
+
+    #[tokio::test]
+    async fn leaderboard_is_sorted_by_score() {
+        let (app, _tmp_dir) = test_app();
+
+        let (_, alice_register) = request_json(
+            &app,
+            Method::POST,
+            "/auth/register",
+            json!({"username":"alice","password":"password123"}),
+            None,
+        )
+        .await;
+        let alice_token = alice_register["access_token"]
+            .as_str()
+            .expect("missing alice token");
+
+        let (_, bob_register) = request_json(
+            &app,
+            Method::POST,
+            "/auth/register",
+            json!({"username":"bob","password":"password123"}),
+            None,
+        )
+        .await;
+        let bob_token = bob_register["access_token"].as_str().expect("missing bob token");
+
+        let _ = request_json(
+            &app,
+            Method::POST,
+            "/scores/record",
+            json!({"won": true}),
+            Some(alice_token),
+        )
+        .await;
+        let _ = request_json(
+            &app,
+            Method::POST,
+            "/scores/record",
+            json!({"won": true}),
+            Some(alice_token),
+        )
+        .await;
+        let _ = request_json(
+            &app,
+            Method::POST,
+            "/scores/record",
+            json!({"won": false}),
+            Some(bob_token),
+        )
+        .await;
+
+        let (status, leaderboard_payload) = request_no_body(&app, Method::GET, "/scores/leaderboard").await;
+        assert_eq!(status, StatusCode::OK);
+
+        let players = leaderboard_payload["players"]
+            .as_array()
+            .expect("players should be an array");
+        assert_eq!(players[0]["username"], "alice");
+        assert_eq!(players[0]["score"], 20);
+        assert_eq!(players[1]["username"], "bob");
+        assert_eq!(players[1]["score"], 2);
+    }
+}

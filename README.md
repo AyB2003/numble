@@ -43,6 +43,22 @@ npm install
 npm run dev
 ```
 
+## Run tests
+
+### Backend tests
+
+```bash
+cd backend
+cargo test
+```
+
+### Frontend tests
+
+```bash
+cd front
+npm test
+```
+
 ## API endpoints
 
 - `POST /auth/register`
