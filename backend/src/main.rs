@@ -11,9 +11,11 @@ use tower_http::cors::CorsLayer;
 async fn main() {
     let jwt_secret =
         std::env::var("JWT_SECRET").unwrap_or_else(|_| "dev-secret-change-me".to_string());
+    let database_url = std::env::var("DATABASE_URL").ok();
     let db_path = std::env::var("DB_PATH").unwrap_or_else(|_| "./users_db".to_string());
 
-    let app_state = user::AppState::new(jwt_secret, db_path)
+    let app_state = user::AppState::new(jwt_secret, database_url, db_path)
+        .await
         .expect("failed to initialize users database");
 
     let cors = CorsLayer::new()
@@ -22,6 +24,7 @@ async fn main() {
         .allow_headers(tower_http::cors::Any);
 
     let app = Router::new()
+        .route("/health", get(health))
         .route("/auth/register", post(user::register))
         .route("/auth/login", post(user::login))
         .route("/auth/me", get(user::me))
@@ -39,4 +42,8 @@ async fn main() {
     axum::serve(listener, app)
         .await
         .expect("server stopped unexpectedly");
+}
+
+async fn health() -> &'static str {
+    "ok"
 }

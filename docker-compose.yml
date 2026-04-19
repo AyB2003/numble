@@ -1,4 +1,16 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: numble-postgres
+    environment:
+      POSTGRES_DB: numble
+      POSTGRES_USER: numble
+      POSTGRES_PASSWORD: numble
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
   backend:
     build:
       context: ./backend
@@ -6,9 +18,12 @@ services:
     container_name: numble-backend
     environment:
       JWT_SECRET: dev-secret-change-me
+      DATABASE_URL: postgres://numble:numble@postgres:5432/numble
       DB_PATH: /data/users_db
     ports:
       - "3001:3001"
+    depends_on:
+      - postgres
     volumes:
       - backend-data:/data
 
@@ -26,3 +41,4 @@ services:
 
 volumes:
   backend-data:
+  postgres-data:

@@ -9,21 +9,46 @@ use axum::{
 use bcrypt::{DEFAULT_COST, hash, verify};
 use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
-use serde_json;
+use sqlx::{PgPool, Row, postgres::PgPoolOptions};
 
 #[derive(Clone)]
 pub struct AppState {
-    users_db: sled::Db,
+    storage: StorageBackend,
     jwt_secret: Arc<String>,
 }
 
+#[derive(Clone)]
+enum StorageBackend {
+    Postgres(PgPool),
+    Sled(sled::Db),
+}
+
 impl AppState {
-    pub fn new(jwt_secret: String, db_path: String) -> Result<Self, String> {
-        let users_db = sled::open(&db_path)
-            .map_err(|error| format!("unable to open database at {db_path}: {error}"))?;
+    pub async fn new(
+        jwt_secret: String,
+        database_url: Option<String>,
+        db_path: String,
+    ) -> Result<Self, String> {
+        let storage = if let Some(url) = database_url.filter(|value| !value.trim().is_empty()) {
+            let pool = PgPoolOptions::new()
+                .max_connections(5)
+                .connect(&url)
+                .await
+                .map_err(|error| format!("unable to connect to postgres: {error}"))?;
+
+            initialize_postgres_schema(&pool)
+                .await
+                .map_err(|error| format!("unable to initialize postgres schema: {error}"))?;
+
+            StorageBackend::Postgres(pool)
+        } else {
+            let users_db = sled::open(&db_path)
+                .map_err(|error| format!("unable to open database at {db_path}: {error}"))?;
+            StorageBackend::Sled(users_db)
+        };
 
         Ok(Self {
-            users_db,
+            storage,
             jwt_secret: Arc::new(jwt_secret),
         })
     }
@@ -124,7 +149,13 @@ impl IntoResponse for AuthError {
             AuthError::Internal(message) => (StatusCode::INTERNAL_SERVER_ERROR, message),
         };
 
-        (status, Json(ErrorMessage { error: message.to_string() })).into_response()
+        (
+            status,
+            Json(ErrorMessage {
+                error: message.to_string(),
+            }),
+        )
+            .into_response()
     }
 }
 
@@ -165,61 +196,80 @@ pub async fn register(
 ) -> Result<impl IntoResponse, AuthError> {
     validate_credentials(&payload.username, &payload.password)?;
 
-    let db_for_check = state.users_db.clone();
-    let username_for_check = payload.username.clone();
-    let user_exists = tokio::task::spawn_blocking(move || {
-        db_for_check
-            .contains_key(username_for_check.as_bytes())
-            .map_err(|_| AuthError::Internal("unable to query users database"))
-    })
-    .await
-    .map_err(|_| AuthError::Internal("unable to query users database"))??;
-
-    if user_exists {
-        return Err(AuthError::Conflict("username already exists"));
-    }
-
     let password_hash = tokio::task::spawn_blocking(move || hash(payload.password, DEFAULT_COST))
         .await
         .map_err(|_| AuthError::Internal("unable to hash password"))
         .and_then(|result| result.map_err(|_| AuthError::Internal("unable to hash password")))?;
 
-    let db_for_insert = state.users_db.clone();
-    let username_for_insert = payload.username.clone();
-    let user_record = UserRecord {
-        password_hash,
-        score: 0,
-        wins: 0,
-        losses: 0,
-        games_played: 0,
-    };
-    let encoded_user = serde_json::to_vec(&user_record)
-        .map_err(|_| AuthError::Internal("unable to encode user record"))?;
+    match &state.storage {
+        StorageBackend::Postgres(pool) => {
+            let result = sqlx::query("INSERT INTO users (username, password_hash) VALUES ($1, $2)")
+                .bind(payload.username.as_str())
+                .bind(password_hash)
+                .execute(pool)
+                .await;
 
-    let write_result = tokio::task::spawn_blocking(move || {
-        db_for_insert
-            .compare_and_swap(
-                username_for_insert.as_bytes(),
-                None as Option<&[u8]>,
-                Some(encoded_user.as_slice()),
-            )
-            .map_err(|_| AuthError::Internal("unable to write user to database"))
-    })
-    .await
-    .map_err(|_| AuthError::Internal("unable to write user to database"))??;
+            match result {
+                Ok(_) => {}
+                Err(error) if is_unique_violation(&error) => {
+                    return Err(AuthError::Conflict("username already exists"));
+                }
+                Err(_) => return Err(AuthError::Internal("unable to write user to database")),
+            }
+        }
+        StorageBackend::Sled(db) => {
+            let username_for_check = payload.username.clone();
+            let db_for_check = db.clone();
+            let user_exists = tokio::task::spawn_blocking(move || {
+                db_for_check
+                    .contains_key(username_for_check.as_bytes())
+                    .map_err(|_| AuthError::Internal("unable to query users database"))
+            })
+            .await
+            .map_err(|_| AuthError::Internal("unable to query users database"))??;
 
-    if write_result.is_err() {
-        return Err(AuthError::Conflict("username already exists"));
+            if user_exists {
+                return Err(AuthError::Conflict("username already exists"));
+            }
+
+            let user_record = UserRecord {
+                password_hash,
+                score: 0,
+                wins: 0,
+                losses: 0,
+                games_played: 0,
+            };
+            let encoded_user = serde_json::to_vec(&user_record)
+                .map_err(|_| AuthError::Internal("unable to encode user record"))?;
+
+            let db_for_insert = db.clone();
+            let username_for_insert = payload.username.clone();
+            let write_result = tokio::task::spawn_blocking(move || {
+                db_for_insert
+                    .compare_and_swap(
+                        username_for_insert.as_bytes(),
+                        None as Option<&[u8]>,
+                        Some(encoded_user.as_slice()),
+                    )
+                    .map_err(|_| AuthError::Internal("unable to write user to database"))
+            })
+            .await
+            .map_err(|_| AuthError::Internal("unable to write user to database"))??;
+
+            if write_result.is_err() {
+                return Err(AuthError::Conflict("username already exists"));
+            }
+
+            let db_for_flush = db.clone();
+            tokio::task::spawn_blocking(move || {
+                db_for_flush
+                    .flush()
+                    .map_err(|_| AuthError::Internal("unable to persist user data"))
+            })
+            .await
+            .map_err(|_| AuthError::Internal("unable to persist user data"))??;
+        }
     }
-
-    let db_for_flush = state.users_db.clone();
-    tokio::task::spawn_blocking(move || {
-        db_for_flush
-            .flush()
-            .map_err(|_| AuthError::Internal("unable to persist user data"))
-    })
-    .await
-    .map_err(|_| AuthError::Internal("unable to persist user data"))??;
 
     let access_token = create_token(&payload.username, state.jwt_secret.as_str())?;
 
@@ -240,15 +290,30 @@ pub async fn login(
         return Err(AuthError::BadRequest("username and password are required"));
     }
 
-    let db_for_read = state.users_db.clone();
-    let username_for_read = payload.username.clone();
-    let user_record = tokio::task::spawn_blocking(move || {
-        read_user_record(&db_for_read, &username_for_read)
-    })
-    .await
-    .map_err(|_| AuthError::Internal("unable to read users database"))??;
+    let password_hash = match &state.storage {
+        StorageBackend::Postgres(pool) => {
+            let maybe_row = sqlx::query("SELECT password_hash FROM users WHERE username = $1")
+                .bind(payload.username.as_str())
+                .fetch_optional(pool)
+                .await
+                .map_err(|_| AuthError::Internal("unable to read users database"))?;
 
-    let password_hash = user_record.password_hash;
+            let row = maybe_row.ok_or(AuthError::Unauthorized("invalid credentials"))?;
+            row.try_get::<String, _>("password_hash")
+                .map_err(|_| AuthError::Internal("stored user data is corrupted"))?
+        }
+        StorageBackend::Sled(db) => {
+            let username_for_read = payload.username.clone();
+            let db_for_read = db.clone();
+            let user_record = tokio::task::spawn_blocking(move || {
+                read_user_record_sled(&db_for_read, &username_for_read)
+            })
+            .await
+            .map_err(|_| AuthError::Internal("unable to read users database"))??;
+
+            user_record.password_hash
+        }
+    };
 
     let password = payload.password;
     let is_valid = tokio::task::spawn_blocking(move || verify(password, &password_hash))
@@ -272,22 +337,56 @@ pub async fn me(
     State(state): State<AppState>,
     auth_user: AuthUser,
 ) -> Result<impl IntoResponse, AuthError> {
-    let db_for_read = state.users_db.clone();
     let username = auth_user.username;
-    let username_for_lookup = username.clone();
 
-    let user_record = tokio::task::spawn_blocking(move || {
-        read_user_record(&db_for_read, &username_for_lookup)
-    })
-    .await
-    .map_err(|_| AuthError::Internal("unable to read users database"))??;
+    let record = match &state.storage {
+        StorageBackend::Postgres(pool) => {
+            let maybe_row = sqlx::query(
+                "SELECT score, wins, losses, games_played FROM users WHERE username = $1",
+            )
+            .bind(username.as_str())
+            .fetch_optional(pool)
+            .await
+            .map_err(|_| AuthError::Internal("unable to read users database"))?;
+
+            let row = maybe_row.ok_or(AuthError::Unauthorized("invalid credentials"))?;
+            UserRecord {
+                password_hash: String::new(),
+                score: row
+                    .try_get::<i32, _>("score")
+                    .map_err(|_| AuthError::Internal("stored user data is corrupted"))?
+                    as u32,
+                wins: row
+                    .try_get::<i32, _>("wins")
+                    .map_err(|_| AuthError::Internal("stored user data is corrupted"))?
+                    as u32,
+                losses: row
+                    .try_get::<i32, _>("losses")
+                    .map_err(|_| AuthError::Internal("stored user data is corrupted"))?
+                    as u32,
+                games_played: row
+                    .try_get::<i32, _>("games_played")
+                    .map_err(|_| AuthError::Internal("stored user data is corrupted"))?
+                    as u32,
+            }
+        }
+        StorageBackend::Sled(db) => {
+            let username_for_lookup = username.clone();
+            let db_for_read = db.clone();
+            tokio::task::spawn_blocking(move || {
+                read_user_record_sled(&db_for_read, &username_for_lookup)
+            })
+            .await
+            .map_err(|_| AuthError::Internal("unable to read users database"))??
+        }
+    };
 
     Ok(Json(MeResponse {
         username,
-        score: user_record.score,
-        wins: user_record.wins,
-        losses: user_record.losses,
-        games_played: user_record.games_played,
+        score: record.score,
+        wins: record.wins,
+        losses: record.losses,
+        games_played: record.games_played,
     }))
 }
 
@@ -296,15 +395,56 @@ pub async fn record_score(
     auth_user: AuthUser,
     Json(payload): Json<ScoreUpdateRequest>,
 ) -> Result<impl IntoResponse, AuthError> {
-    let db_for_write = state.users_db.clone();
     let username = auth_user.username;
-    let username_for_write = username.clone();
 
-    let updated_record = tokio::task::spawn_blocking(move || {
-        update_user_score(&db_for_write, &username_for_write, payload.won)
-    })
-    .await
-    .map_err(|_| AuthError::Internal("unable to update score"))??;
+    let updated_record = match &state.storage {
+        StorageBackend::Postgres(pool) => {
+            let maybe_row = sqlx::query(
+                "UPDATE users
+                 SET games_played = games_played + 1,
+                     wins = wins + CASE WHEN $2 THEN 1 ELSE 0 END,
+                     losses = losses + CASE WHEN $2 THEN 0 ELSE 1 END,
+                     score = score + CASE WHEN $2 THEN 10 ELSE 2 END
+                 WHERE username = $1
+                 RETURNING score, wins, losses, games_played",
+            )
+            .bind(username.as_str())
+            .bind(payload.won)
+            .fetch_optional(pool)
+            .await
+            .map_err(|_| AuthError::Internal("unable to update score"))?;
+
+            let row = maybe_row.ok_or(AuthError::Unauthorized("invalid credentials"))?;
+            UserRecord {
+                password_hash: String::new(),
+                score: row
+                    .try_get::<i32, _>("score")
+                    .map_err(|_| AuthError::Internal("stored user data is corrupted"))?
+                    as u32,
+                wins: row
+                    .try_get::<i32, _>("wins")
+                    .map_err(|_| AuthError::Internal("stored user data is corrupted"))?
+                    as u32,
+                losses: row
+                    .try_get::<i32, _>("losses")
+                    .map_err(|_| AuthError::Internal("stored user data is corrupted"))?
+                    as u32,
+                games_played: row
+                    .try_get::<i32, _>("games_played")
+                    .map_err(|_| AuthError::Internal("stored user data is corrupted"))?
+                    as u32,
+            }
+        }
+        StorageBackend::Sled(db) => {
+            let username_for_write = username.clone();
+            let db_for_write = db.clone();
+            tokio::task::spawn_blocking(move || {
+                update_user_score_sled(&db_for_write, &username_for_write, payload.won)
+            })
+            .await
+            .map_err(|_| AuthError::Internal("unable to update score"))??
+        }
+    };
 
     Ok(Json(ScoreUpdateResponse {
         username,
@@ -316,11 +456,51 @@ pub async fn record_score(
 }
 
 pub async fn leaderboard(State(state): State<AppState>) -> Result<impl IntoResponse, AuthError> {
-    let db_for_read = state.users_db.clone();
+    let players = match &state.storage {
+        StorageBackend::Postgres(pool) => {
+            let rows = sqlx::query(
+                "SELECT username, score, wins, losses, games_played
+                 FROM users
+                 ORDER BY score DESC, wins DESC, losses ASC, username ASC
+                 LIMIT 10",
+            )
+            .fetch_all(pool)
+            .await
+            .map_err(|_| AuthError::Internal("unable to read leaderboard"))?;
 
-    let players = tokio::task::spawn_blocking(move || read_leaderboard(&db_for_read))
-        .await
-        .map_err(|_| AuthError::Internal("unable to read leaderboard"))??;
+            rows.into_iter()
+                .map(|row| {
+                    Ok(LeaderboardEntry {
+                        username: row
+                            .try_get::<String, _>("username")
+                            .map_err(|_| AuthError::Internal("stored username data is corrupted"))?,
+                        score: row
+                            .try_get::<i32, _>("score")
+                            .map_err(|_| AuthError::Internal("stored user data is corrupted"))?
+                            as u32,
+                        wins: row
+                            .try_get::<i32, _>("wins")
+                            .map_err(|_| AuthError::Internal("stored user data is corrupted"))?
+                            as u32,
+                        losses: row
+                            .try_get::<i32, _>("losses")
+                            .map_err(|_| AuthError::Internal("stored user data is corrupted"))?
+                            as u32,
+                        games_played: row
+                            .try_get::<i32, _>("games_played")
+                            .map_err(|_| AuthError::Internal("stored user data is corrupted"))?
+                            as u32,
+                    })
+                })
+                .collect::<Result<Vec<_>, AuthError>>()?
+        }
+        StorageBackend::Sled(db) => {
+            let db_for_read = db.clone();
+            tokio::task::spawn_blocking(move || read_leaderboard_sled(&db_for_read))
+                .await
+                .map_err(|_| AuthError::Internal("unable to read leaderboard"))??
+        }
+    };
 
     Ok(Json(LeaderboardResponse { players }))
 }
@@ -372,7 +552,31 @@ fn now_in_seconds() -> u64 {
     UNIX_EPOCH.elapsed().unwrap_or_default().as_secs()
 }
 
-fn parse_user_record(bytes: &[u8]) -> Result<UserRecord, AuthError> {
+async fn initialize_postgres_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS users (
+            username TEXT PRIMARY KEY,
+            password_hash TEXT NOT NULL,
+            score INTEGER NOT NULL DEFAULT 0,
+            wins INTEGER NOT NULL DEFAULT 0,
+            losses INTEGER NOT NULL DEFAULT 0,
+            games_played INTEGER NOT NULL DEFAULT 0
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+fn is_unique_violation(error: &sqlx::Error) -> bool {
+    error
+        .as_database_error()
+        .and_then(|db_error| db_error.code().map(|code| code == "23505"))
+        .unwrap_or(false)
+}
+
+fn parse_user_record_sled(bytes: &[u8]) -> Result<UserRecord, AuthError> {
     if let Ok(record) = serde_json::from_slice::<UserRecord>(bytes) {
         return Ok(record);
     }
@@ -389,23 +593,23 @@ fn parse_user_record(bytes: &[u8]) -> Result<UserRecord, AuthError> {
     })
 }
 
-fn read_user_record(db: &sled::Db, username: &str) -> Result<UserRecord, AuthError> {
+fn read_user_record_sled(db: &sled::Db, username: &str) -> Result<UserRecord, AuthError> {
     let maybe_record = db
         .get(username.as_bytes())
         .map_err(|_| AuthError::Internal("unable to read users database"))?;
 
     let raw_record = maybe_record.ok_or(AuthError::Unauthorized("invalid credentials"))?;
-    parse_user_record(&raw_record)
+    parse_user_record_sled(&raw_record)
 }
 
-fn update_user_score(db: &sled::Db, username: &str, won: bool) -> Result<UserRecord, AuthError> {
+fn update_user_score_sled(db: &sled::Db, username: &str, won: bool) -> Result<UserRecord, AuthError> {
     loop {
         let current_value = db
             .get(username.as_bytes())
             .map_err(|_| AuthError::Internal("unable to read users database"))?
             .ok_or(AuthError::Unauthorized("invalid credentials"))?;
 
-        let mut record = parse_user_record(&current_value)?;
+        let mut record = parse_user_record_sled(&current_value)?;
         record.games_played = record.games_played.saturating_add(1);
 
         if won {
@@ -435,14 +639,14 @@ fn update_user_score(db: &sled::Db, username: &str, won: bool) -> Result<UserRec
     }
 }
 
-fn read_leaderboard(db: &sled::Db) -> Result<Vec<LeaderboardEntry>, AuthError> {
+fn read_leaderboard_sled(db: &sled::Db) -> Result<Vec<LeaderboardEntry>, AuthError> {
     let mut entries = Vec::new();
 
     for item in db.iter() {
         let (key, value) = item.map_err(|_| AuthError::Internal("unable to read leaderboard"))?;
         let username = String::from_utf8(key.to_vec())
             .map_err(|_| AuthError::Internal("stored username data is corrupted"))?;
-        let record = parse_user_record(&value)?;
+        let record = parse_user_record_sled(&value)?;
 
         entries.push(LeaderboardEntry {
             username,
@@ -478,7 +682,7 @@ mod tests {
     use tempfile::TempDir;
     use tower::ServiceExt;
 
-    fn test_app() -> (Router, TempDir) {
+    async fn test_app() -> (Router, TempDir) {
         let tmp_dir = TempDir::new().expect("failed to create temp dir");
         let db_path = tmp_dir
             .path()
@@ -486,7 +690,8 @@ mod tests {
             .to_string_lossy()
             .to_string();
 
-        let state = AppState::new("test-secret".to_string(), db_path)
+        let state = AppState::new("test-secret".to_string(), None, db_path)
+            .await
             .expect("failed to create app state");
 
         let app = Router::new()
@@ -555,7 +760,7 @@ mod tests {
 
     #[tokio::test]
     async fn auth_and_score_flow_works() {
-        let (app, _tmp_dir) = test_app();
+        let (app, _tmp_dir) = test_app().await;
 
         let (register_status, register_payload) = request_json(
             &app,
@@ -572,7 +777,8 @@ mod tests {
             .and_then(Value::as_str)
             .expect("missing access token");
 
-        let (me_status, me_payload) = request_json(&app, Method::GET, "/auth/me", json!({}), Some(token)).await;
+        let (me_status, me_payload) =
+            request_json(&app, Method::GET, "/auth/me", json!({}), Some(token)).await;
         assert_eq!(me_status, StatusCode::OK);
         assert_eq!(me_payload["username"], "alice");
         assert_eq!(me_payload["score"], 0);
@@ -606,7 +812,7 @@ mod tests {
 
     #[tokio::test]
     async fn leaderboard_is_sorted_by_score() {
-        let (app, _tmp_dir) = test_app();
+        let (app, _tmp_dir) = test_app().await;
 
         let (_, alice_register) = request_json(
             &app,
