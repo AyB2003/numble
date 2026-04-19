@@ -32,6 +32,11 @@ type ScoreUpdateResponse = {
   games_played: number;
 };
 
+type ScoreUpdateRequest = {
+  won: boolean;
+  guesses_used: number;
+};
+
 export default function Home() {
   const router = useRouter();
   const rowSize = 6;
@@ -136,7 +141,10 @@ export default function Home() {
             "Content-Type": "application/json",
             Authorization: `Bearer ${token}`,
           },
-          body: JSON.stringify({ won: hasWon }),
+          body: JSON.stringify({
+            won: hasWon,
+            guesses_used: Math.max(1, attemptsUsed),
+          } as ScoreUpdateRequest),
         });
 
         if (!response.ok) {
@@ -160,7 +168,7 @@ export default function Home() {
     return () => {
       isCancelled = true;
     };
-  }, [apiBaseUrl, hasRecordedResult, hasWon, isAuthorized, isGameOver]);
+  }, [apiBaseUrl, attemptsUsed, hasRecordedResult, hasWon, isAuthorized, isGameOver]);
 
   if (isCheckingAuth) {
     return (

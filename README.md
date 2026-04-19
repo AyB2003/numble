@@ -5,6 +5,22 @@ Small full-stack auth demo:
 - Backend: Rust + Axum (port 3001)
 - Database: PostgreSQL (Docker) with embedded sled fallback for local/dev backup
 
+## Environment setup
+
+Copy and customize env files before running in serious environments:
+
+```bash
+cp .env.example .env
+cp backend/.env.example backend/.env
+cp front/.env.local.example front/.env.local
+```
+
+Security-sensitive values to always customize:
+- `JWT_SECRET` (minimum 32 chars outside development)
+- `POSTGRES_PASSWORD`
+- `DATABASE_URL`
+- `CORS_ORIGIN`
+
 ## Quick start (Docker)
 
 From the project root:
@@ -30,9 +46,12 @@ docker compose down
 
 ```bash
 cd backend
-$env:JWT_SECRET="dev-secret-change-me"
+$env:APP_ENV="development"
+$env:JWT_SECRET="replace-with-a-long-random-secret-at-least-32-chars"
+$env:CORS_ORIGIN="http://localhost:3000"
 $env:DATABASE_URL="postgres://numble:numble@localhost:5432/numble"
 $env:DB_PATH="./users_db"
+$env:BIND_ADDRESS="0.0.0.0:3001"
 cargo run
 ```
 
@@ -69,7 +88,7 @@ npm test
 - `POST /auth/register`
 - `POST /auth/login`
 - `GET /auth/me` (requires `Authorization: Bearer <token>`)
-- `POST /scores/record` (requires `Authorization: Bearer <token>`, body: `{ "won": true|false }`)
+- `POST /scores/record` (requires `Authorization: Bearer <token>`, body: `{ "won": true|false, "guesses_used": 1..6 }`)
 - `GET /scores/leaderboard`
 - `GET /health`
 
@@ -105,7 +124,21 @@ Invoke-RestMethod -Method Get -Uri http://localhost:3001/auth/me `
 - PostgreSQL data is persisted in Docker volume `postgres-data`.
 - `DB_PATH` sled storage is available as fallback when `DATABASE_URL` is not set.
 - Each finished game updates player stats and score.
+- Score is guess-based (fewer guesses means higher points), not fixed increments.
 - Leaderboard returns the top 10 players sorted by score.
+
+## Security Defaults Added
+
+- `.env`-driven configuration for secrets and origins.
+- CORS restricted to configured `CORS_ORIGIN`.
+- Request body size limit (`8 KB`) to reduce abuse surface.
+- Response hardening headers:
+  - `X-Content-Type-Options: nosniff`
+  - `X-Frame-Options: DENY`
+  - `Referrer-Policy: no-referrer`
+  - `Permissions-Policy` for camera/mic/geolocation
+  - strict API `Content-Security-Policy`
+- Production guardrail: app panics if `JWT_SECRET` is weak/default outside development.
 
 ## Roadmap
 

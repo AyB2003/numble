@@ -104,6 +104,7 @@ pub struct LeaderboardResponse {
 #[derive(Debug, Deserialize)]
 pub struct ScoreUpdateRequest {
     pub won: bool,
+    pub guesses_used: u32,
 }
 
 #[derive(Debug, Serialize)]
@@ -396,6 +397,7 @@ pub async fn record_score(
     Json(payload): Json<ScoreUpdateRequest>,
 ) -> Result<impl IntoResponse, AuthError> {
     let username = auth_user.username;
+    let score_delta = calculate_score_delta(payload.won, payload.guesses_used)?;
 
     let updated_record = match &state.storage {
         StorageBackend::Postgres(pool) => {
@@ -404,12 +406,13 @@ pub async fn record_score(
                  SET games_played = games_played + 1,
                      wins = wins + CASE WHEN $2 THEN 1 ELSE 0 END,
                      losses = losses + CASE WHEN $2 THEN 0 ELSE 1 END,
-                     score = score + CASE WHEN $2 THEN 10 ELSE 2 END
+                     score = score + $3
                  WHERE username = $1
                  RETURNING score, wins, losses, games_played",
             )
             .bind(username.as_str())
             .bind(payload.won)
+            .bind(score_delta as i32)
             .fetch_optional(pool)
             .await
             .map_err(|_| AuthError::Internal("unable to update score"))?;
@@ -439,7 +442,7 @@ pub async fn record_score(
             let username_for_write = username.clone();
             let db_for_write = db.clone();
             tokio::task::spawn_blocking(move || {
-                update_user_score_sled(&db_for_write, &username_for_write, payload.won)
+                update_user_score_sled(&db_for_write, &username_for_write, payload.won, score_delta)
             })
             .await
             .map_err(|_| AuthError::Internal("unable to update score"))??
@@ -602,7 +605,12 @@ fn read_user_record_sled(db: &sled::Db, username: &str) -> Result<UserRecord, Au
     parse_user_record_sled(&raw_record)
 }
 
-fn update_user_score_sled(db: &sled::Db, username: &str, won: bool) -> Result<UserRecord, AuthError> {
+fn update_user_score_sled(
+    db: &sled::Db,
+    username: &str,
+    won: bool,
+    score_delta: u32,
+) -> Result<UserRecord, AuthError> {
     loop {
         let current_value = db
             .get(username.as_bytes())
@@ -614,10 +622,10 @@ fn update_user_score_sled(db: &sled::Db, username: &str, won: bool) -> Result<Us
 
         if won {
             record.wins = record.wins.saturating_add(1);
-            record.score = record.score.saturating_add(10);
+            record.score = record.score.saturating_add(score_delta);
         } else {
             record.losses = record.losses.saturating_add(1);
-            record.score = record.score.saturating_add(2);
+            record.score = record.score.saturating_add(score_delta);
         }
 
         let encoded_record = serde_json::to_vec(&record)
@@ -637,6 +645,23 @@ fn update_user_score_sled(db: &sled::Db, username: &str, won: bool) -> Result<Us
             return Ok(record);
         }
     }
+}
+
+fn calculate_score_delta(won: bool, guesses_used: u32) -> Result<u32, AuthError> {
+    const MAX_GUESSES: u32 = 6;
+
+    if !(1..=MAX_GUESSES).contains(&guesses_used) {
+        return Err(AuthError::BadRequest(
+            "guesses_used must be between 1 and 6",
+        ));
+    }
+
+    if !won {
+        return Ok(0);
+    }
+
+    // Rewards fewer guesses with larger points: 120, 60, 40, 30, 24, 20.
+    Ok(120 / guesses_used)
 }
 
 fn read_leaderboard_sled(db: &sled::Db) -> Result<Vec<LeaderboardEntry>, AuthError> {
@@ -787,24 +812,24 @@ mod tests {
             &app,
             Method::POST,
             "/scores/record",
-            json!({"won": true}),
+            json!({"won": true, "guesses_used": 1}),
             Some(token),
         )
         .await;
         assert_eq!(win_status, StatusCode::OK);
-        assert_eq!(win_payload["score"], 10);
+        assert_eq!(win_payload["score"], 120);
         assert_eq!(win_payload["wins"], 1);
 
         let (loss_status, loss_payload) = request_json(
             &app,
             Method::POST,
             "/scores/record",
-            json!({"won": false}),
+            json!({"won": false, "guesses_used": 2}),
             Some(token),
         )
         .await;
         assert_eq!(loss_status, StatusCode::OK);
-        assert_eq!(loss_payload["score"], 12);
+        assert_eq!(loss_payload["score"], 120);
         assert_eq!(loss_payload["wins"], 1);
         assert_eq!(loss_payload["losses"], 1);
         assert_eq!(loss_payload["games_played"], 2);
@@ -840,7 +865,7 @@ mod tests {
             &app,
             Method::POST,
             "/scores/record",
-            json!({"won": true}),
+            json!({"won": true, "guesses_used": 1}),
             Some(alice_token),
         )
         .await;
@@ -848,7 +873,7 @@ mod tests {
             &app,
             Method::POST,
             "/scores/record",
-            json!({"won": true}),
+            json!({"won": true, "guesses_used": 2}),
             Some(alice_token),
         )
         .await;
@@ -856,7 +881,7 @@ mod tests {
             &app,
             Method::POST,
             "/scores/record",
-            json!({"won": false}),
+            json!({"won": false, "guesses_used": 6}),
             Some(bob_token),
         )
         .await;
@@ -868,8 +893,8 @@ mod tests {
             .as_array()
             .expect("players should be an array");
         assert_eq!(players[0]["username"], "alice");
-        assert_eq!(players[0]["score"], 20);
+        assert_eq!(players[0]["score"], 180);
         assert_eq!(players[1]["username"], "bob");
-        assert_eq!(players[1]["score"], 2);
+        assert_eq!(players[1]["score"], 0);
     }
 }

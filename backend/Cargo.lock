@@ -93,6 +93,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "bcrypt",
+ "dotenvy",
  "jsonwebtoken",
  "serde",
  "serde_json",

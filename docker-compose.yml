@@ -3,9 +3,9 @@ services:
     image: postgres:16-alpine
     container_name: numble-postgres
     environment:
-      POSTGRES_DB: numble
-      POSTGRES_USER: numble
-      POSTGRES_PASSWORD: numble
+      POSTGRES_DB: ${POSTGRES_DB:-numble}
+      POSTGRES_USER: ${POSTGRES_USER:-numble}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-numble}
     ports:
       - "5432:5432"
     volumes:
@@ -17,9 +17,12 @@ services:
       dockerfile: Dockerfile
     container_name: numble-backend
     environment:
-      JWT_SECRET: dev-secret-change-me
-      DATABASE_URL: postgres://numble:numble@postgres:5432/numble
-      DB_PATH: /data/users_db
+      APP_ENV: ${APP_ENV:-development}
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
+      DATABASE_URL: ${DATABASE_URL:-postgres://${POSTGRES_USER:-numble}:${POSTGRES_PASSWORD:-numble}@postgres:5432/${POSTGRES_DB:-numble}}
+      DB_PATH: ${DB_PATH:-/data/users_db}
+      BIND_ADDRESS: 0.0.0.0:3001
     ports:
       - "3001:3001"
     depends_on:
@@ -32,7 +35,7 @@ services:
       context: ./front
       dockerfile: Dockerfile
       args:
-        NEXT_PUBLIC_API_URL: http://localhost:3001
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:3001}
     container_name: numble-front
     depends_on:
       - backend
