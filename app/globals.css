@@ -24,3 +24,121 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+.main-layout{
+  justify-items: center;
+  height: 80vh;
+  align-content: start;
+}
+
+.main-layout h1 {
+  font-family: var(--font-inter), sans-serif;
+  font-style: normal;
+  font-weight: 400;
+  font-size: 80px;
+  line-height: 97px;
+  letter-spacing: 0.15em;
+  color: #FFFFFF;
+  text-shadow: 0px 0px 37.44px #FFFFFF;
+}
+
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 12px;
+  width: min(680px, 60vw);
+  margin-top: 24px;
+}
+
+.grid-cell {
+  --cell-color: rgba(255, 255, 255, 0.06);
+  display: flex;
+  aspect-ratio: 2 / 1;
+  border: 1px solid rgba(255, 255, 255, 0.65);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  justify-content: center;
+  align-items: center;
+}
+
+
+.grid-cell input {
+  font-family: var(--font-inter), sans-serif;
+  text-align: center;
+  margin: 0;
+  width: 52px;
+  height: 34px;
+  font-size: 1.15rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: #ffffff;
+  border: none;
+  border-radius: 8px;
+
+  outline: none;
+}
+
+
+
+
+
+.grid-cell.revealed {
+  background-color: var(--cell-color);
+}
+
+.grid-cell.reveal {
+  animation: tile-reveal 420ms ease both;
+  animation-delay: var(--reveal-delay, 0ms);
+}
+
+@keyframes tile-reveal {
+  0% {
+    transform: rotateX(0deg);
+    background: rgba(255, 255, 255, 0.06);
+  }
+  49% {
+    transform: rotateX(90deg);
+    background: rgba(255, 255, 255, 0.06);
+  }
+  50% {
+    transform: rotateX(90deg);
+    background: var(--cell-color);
+  }
+  100% {
+    transform: rotateX(0deg);
+    background: var(--cell-color);
+  }
+}
+
+.grid-cell.green { --cell-color: #6aaa64; }
+.grid-cell.yellow { --cell-color: #c9b458; }
+.grid-cell.orange { --cell-color: #e38c2d; }
+.grid-cell.red { --cell-color: #d84315; }
+
+.game-status {
+  margin-top: 18px;
+  font-family: var(--font-inter), sans-serif;
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #9be37c;
+  text-shadow: 0 0 16px rgba(155, 227, 124, 0.45);
+}
+
+.reset-button {
+  margin-top: 12px;
+  padding: 10px 20px;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+  font-family: var(--font-inter), sans-serif;
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+}
+
+.reset-button:hover {
+  background: rgba(255, 255, 255, 0.2);
+}

@@ -1,65 +1,182 @@
-import Image from "next/image";
+"use client";
+
+import { type ChangeEvent, type KeyboardEvent, useState } ²from "react";
 
 export default function Home() {
+  const rowSize = 6;
+  const totalCells = 36;
+  const totalRows = totalCells / rowSize;
+  const revealStepMs = 140;
+  const revealDurationMs = 420;
+  const cells = Array.from({ length: totalCells });
+  const [values, setValues] = useState<string[]>(() => Array(36).fill(""));
+  const [colors, setColors] = useState<string[]>(Array(36).fill("white"));
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [submittedRows, setSubmittedRows] = useState<boolean[]>(
+    Array(totalRows).fill(false),
+  );
+  const [revealedRows, setRevealedRows] = useState<boolean[]>(
+    Array(totalRows).fill(false),
+  );
+  const [animatingRow, setAnimatingRow] = useState<number | null>(null);
+  const [hasWon, setHasWon] = useState(false);
+  const [target, setTarget] = useState(() =>
+    Math.floor(Math.random() * 1000000).toString().padStart(6, "0"),
+  );
+
+  const isGameOver = hasWon || submittedRows.every(Boolean);
+
+  const resetGame = () => {
+    setValues(Array(totalCells).fill(""));
+    setColors(Array(totalCells).fill("white"));
+    setCurrentIndex(0);
+    setSubmittedRows(Array(totalRows).fill(false));
+    setRevealedRows(Array(totalRows).fill(false));
+    setAnimatingRow(null);
+    setHasWon(false);
+    setTarget(Math.floor(Math.random() * 1000000).toString().padStart(6, "0"));
+  };
+
+  const handleChange = (index: number, event: ChangeEvent<HTMLInputElement>) => {
+    const activeRow = Math.floor(currentIndex / rowSize);
+    const row = Math.floor(index / rowSize);
+    if (row !== activeRow || submittedRows[row] || isGameOver) {
+      return;
+    }
+
+    const nextValue = event.target.value.replace(/\D/g, "").slice(-1);
+
+    setValues((prev) => {
+      const next = [...prev];
+      next[index] = nextValue;
+      return next;
+    });
+
+    if (nextValue && index < activeRow * rowSize + (rowSize - 1)) {
+      setCurrentIndex(index + 1);
+    }
+  };
+
+  const handleKeyDown = (index: number, event: KeyboardEvent<HTMLInputElement>) => {
+    const row = Math.floor(index / rowSize);
+    const activeRow = Math.floor(currentIndex / rowSize);
+    const rowStart = row * rowSize;
+
+    if (row !== activeRow || submittedRows[row] || isGameOver) {
+      return;
+    }
+
+    if (event.key === "Backspace" && !values[index] && index > rowStart) {
+      setCurrentIndex(index - 1);
+      return;
+    }
+
+    if (event.key !== "Enter") {
+      return;
+    }
+
+    event.preventDefault();
+
+    const rowValues = values.slice(rowStart, rowStart + rowSize);
+    if (rowValues.some((value) => value === "")) {
+      return;
+    }
+
+    const guess = rowValues.join("");
+    const isWinningRow = guess === target;
+
+    setColors((prev) => {
+      const nextColors = [...prev];
+
+      for (let i = 0; i < rowSize; i++) {
+        const cellIndex = rowStart + i;
+        const diff = Math.abs(Number(target[i]) - Number(rowValues[i]));
+
+        if (diff === 0) {
+          nextColors[cellIndex] = "green";
+        } else if (diff < 3) {
+          nextColors[cellIndex] = "yellow";
+        } else if (diff < 4) {
+          nextColors[cellIndex] = "orange";
+        } else {
+          nextColors[cellIndex] = "red";
+        }
+      }
+
+      return nextColors;
+    });
+
+    setSubmittedRows((prev) => {
+      const next = [...prev];
+      next[row] = true;
+      return next;
+    });
+
+    if (isWinningRow) {
+      setHasWon(true);
+    }
+
+    setAnimatingRow(row);
+
+    const totalRevealTime = (rowSize - 1) * revealStepMs + revealDurationMs;
+    window.setTimeout(() => {
+      setRevealedRows((prev) => {
+        const next = [...prev];
+        next[row] = true;
+        return next;
+      });
+      setAnimatingRow(null);
+    }, totalRevealTime);
+
+    if (!isWinningRow && rowStart + rowSize < totalCells) {
+      setCurrentIndex(rowStart + rowSize);
+    }
+  };
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+    <div className="main-layout">
+      <h1>NUMBLE</h1>
+      <div className="grid">
+        {cells.map((_, index) => (
+          <div
+            key={index}
+            className={`grid-cell ${colors[index]} ${
+              animatingRow === Math.floor(index / rowSize) ? "reveal" : ""
+            } ${
+              revealedRows[Math.floor(index / rowSize)] ? "revealed" : ""
+            }`}
+            style={{
+              ["--reveal-delay" as string]: `${(index % rowSize) * revealStepMs}ms`,
+            }}
           >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
+            {(() => {
+              const row = Math.floor(index / rowSize);
+              const activeRow = Math.floor(currentIndex / rowSize);
+              const isEditable =
+                row === activeRow && !submittedRows[row] && !isGameOver;
+
+              return (
+            <input
+              value={values[index]}
+              inputMode="numeric"
+              maxLength={1}
+              disabled={!isEditable}
+              autoFocus={index === currentIndex}
+              onFocus={() => setCurrentIndex(index)}
+              onChange={(event) => handleChange(index, event)}
+              onKeyDown={(event) => handleKeyDown(index, event)}
             />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
+              );
+            })()}
+          </div>
+        ))}
+      </div>
+      {hasWon ? <p className="game-status">You won!</p> : null}
+      {isGameOver ? (
+        <button type="button" className="reset-button" onClick={resetGame}>
+          Play Again
+        </button>
+      ) : null}
     </div>
   );
 }
