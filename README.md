@@ -29,6 +29,7 @@ docker compose down
 ```bash
 cd backend
 $env:JWT_SECRET="dev-secret-change-me"
+$env:DB_PATH="./users_db"
 cargo run
 ```
 
@@ -76,5 +77,6 @@ Invoke-RestMethod -Method Get -Uri http://localhost:3001/auth/me `
 
 ## Notes
 
-- Users are stored in memory (no database yet).
-- Data resets when the backend restarts.
+- Users are stored in a persistent sled database.
+- Use `DB_PATH` to choose where user data is stored.
+- In Docker, user data is persisted in the `backend-data` volume.

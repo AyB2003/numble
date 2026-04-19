@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc, time::UNIX_EPOCH};
+use std::{sync::Arc, time::UNIX_EPOCH};
 
 use axum::{
     Json,
@@ -9,20 +9,22 @@ use axum::{
 use bcrypt::{DEFAULT_COST, hash, verify};
 use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
-use tokio::sync::RwLock;
 
 #[derive(Clone)]
 pub struct AppState {
-    users: Arc<RwLock<HashMap<String, String>>>,
+    users_db: sled::Db,
     jwt_secret: Arc<String>,
 }
 
 impl AppState {
-    pub fn new(jwt_secret: String) -> Self {
-        Self {
-            users: Arc::new(RwLock::new(HashMap::new())),
+    pub fn new(jwt_secret: String, db_path: String) -> Result<Self, String> {
+        let users_db = sled::open(&db_path)
+            .map_err(|error| format!("unable to open database at {db_path}: {error}"))?;
+
+        Ok(Self {
+            users_db,
             jwt_secret: Arc::new(jwt_secret),
-        }
+        })
     }
 }
 
@@ -121,11 +123,18 @@ pub async fn register(
 ) -> Result<impl IntoResponse, AuthError> {
     validate_credentials(&payload.username, &payload.password)?;
 
-    {
-        let users = state.users.read().await;
-        if users.contains_key(&payload.username) {
-            return Err(AuthError::Conflict("username already exists"));
-        }
+    let db_for_check = state.users_db.clone();
+    let username_for_check = payload.username.clone();
+    let user_exists = tokio::task::spawn_blocking(move || {
+        db_for_check
+            .contains_key(username_for_check.as_bytes())
+            .map_err(|_| AuthError::Internal("unable to query users database"))
+    })
+    .await
+    .map_err(|_| AuthError::Internal("unable to query users database"))??;
+
+    if user_exists {
+        return Err(AuthError::Conflict("username already exists"));
     }
 
     let password_hash = tokio::task::spawn_blocking(move || hash(payload.password, DEFAULT_COST))
@@ -133,10 +142,32 @@ pub async fn register(
         .map_err(|_| AuthError::Internal("unable to hash password"))
         .and_then(|result| result.map_err(|_| AuthError::Internal("unable to hash password")))?;
 
-    {
-        let mut users = state.users.write().await;
-        users.insert(payload.username.clone(), password_hash);
+    let db_for_insert = state.users_db.clone();
+    let username_for_insert = payload.username.clone();
+    let write_result = tokio::task::spawn_blocking(move || {
+        db_for_insert
+            .compare_and_swap(
+                username_for_insert.as_bytes(),
+                None as Option<&[u8]>,
+                Some(password_hash.as_bytes()),
+            )
+            .map_err(|_| AuthError::Internal("unable to write user to database"))
+    })
+    .await
+    .map_err(|_| AuthError::Internal("unable to write user to database"))??;
+
+    if write_result.is_err() {
+        return Err(AuthError::Conflict("username already exists"));
     }
+
+    let db_for_flush = state.users_db.clone();
+    tokio::task::spawn_blocking(move || {
+        db_for_flush
+            .flush()
+            .map_err(|_| AuthError::Internal("unable to persist user data"))
+    })
+    .await
+    .map_err(|_| AuthError::Internal("unable to persist user data"))??;
 
     let access_token = create_token(&payload.username, state.jwt_secret.as_str())?;
 
@@ -157,13 +188,24 @@ pub async fn login(
         return Err(AuthError::BadRequest("username and password are required"));
     }
 
-    let password_hash = {
-        let users = state.users.read().await;
-        users
-            .get(&payload.username)
-            .cloned()
-            .ok_or(AuthError::Unauthorized("invalid credentials"))?
-    };
+    let db_for_read = state.users_db.clone();
+    let username_for_read = payload.username.clone();
+    let password_hash = tokio::task::spawn_blocking(move || {
+        db_for_read
+            .get(username_for_read.as_bytes())
+            .map_err(|_| AuthError::Internal("unable to read users database"))
+            .and_then(|maybe_hash| {
+                maybe_hash
+                    .ok_or(AuthError::Unauthorized("invalid credentials"))
+                    .and_then(|hash_bytes| {
+                        String::from_utf8(hash_bytes.to_vec()).map_err(|_| {
+                            AuthError::Internal("stored user data is corrupted")
+                        })
+                    })
+            })
+    })
+    .await
+    .map_err(|_| AuthError::Internal("unable to read users database"))??;
 
     let password = payload.password;
     let is_valid = tokio::task::spawn_blocking(move || verify(password, &password_hash))

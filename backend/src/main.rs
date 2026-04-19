@@ -11,6 +11,11 @@ use tower_http::cors::CorsLayer;
 async fn main() {
     let jwt_secret =
         std::env::var("JWT_SECRET").unwrap_or_else(|_| "dev-secret-change-me".to_string());
+    let db_path = std::env::var("DB_PATH").unwrap_or_else(|_| "./users_db".to_string());
+
+    let app_state = user::AppState::new(jwt_secret, db_path)
+        .expect("failed to initialize users database");
+
     let cors = CorsLayer::new()
         .allow_origin(HeaderValue::from_static("http://localhost:3000"))
         .allow_methods([Method::GET, Method::POST])
@@ -21,7 +26,7 @@ async fn main() {
         .route("/auth/login", post(user::login))
         .route("/auth/me", get(user::me))
         .layer(cors)
-        .with_state(user::AppState::new(jwt_secret));
+        .with_state(app_state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3001")
         .await
