@@ -1,5 +1,24 @@
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
+## Run Frontend + Backend Together (Docker)
+
+From the project root (the folder that contains `docker-compose.yml`), run:
+
+```bash
+docker compose up --build
+```
+
+This starts both services:
+
+- Frontend: [http://localhost:3000](http://localhost:3000)
+- Backend: [http://localhost:3001](http://localhost:3001)
+
+To stop everything:
+
+```bash
+docker compose down
+```
+
 ## Getting Started
 
 First, run the development server:
