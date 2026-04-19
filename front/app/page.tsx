@@ -28,6 +28,8 @@ export default function Home() {
   );
   const [isAuthorized, setIsAuthorized] = useState(false);
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+  const attemptsUsed = submittedRows.filter(Boolean).length;
+  const attemptsLeft = totalRows - attemptsUsed;
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -69,8 +71,15 @@ export default function Home() {
   if (isCheckingAuth) {
     return (
       <div className="main-layout">
-        <h1>NUMBLE</h1>
-        <p className="game-status">Checking authentication...</p>
+        <header className="numble-header">
+          <div>
+            <p className="numble-kicker">Guess the hidden number</p>
+            <h1>NUMBLE</h1>
+          </div>
+        </header>
+        <section className="numble-panel">
+          <p className="game-status">Checking authentication...</p>
+        </section>
       </div>
     );
   }
@@ -193,51 +202,66 @@ export default function Home() {
 
   return (
     <div className="main-layout">
-      <h1>NUMBLE</h1>
-      <button type="button" className="reset-button" onClick={handleLogout}>
-        Logout
-      </button>
-      <div className="grid">
-        {cells.map((_, index) => (
-          <div
-            key={index}
-            className={`grid-cell ${colors[index]} ${
-              animatingRow === Math.floor(index / rowSize) ? "reveal" : ""
-            } ${
-              revealedRows[Math.floor(index / rowSize)] ? "revealed" : ""
-            }`}
-            style={{
-              ["--reveal-delay" as string]: `${(index % rowSize) * revealStepMs}ms`,
-            }}
-          >
-            {(() => {
-              const row = Math.floor(index / rowSize);
-              const activeRow = Math.floor(currentIndex / rowSize);
-              const isEditable =
-                row === activeRow && !submittedRows[row] && !isGameOver;
-
-              return (
-            <input
-              value={values[index]}
-              inputMode="numeric"
-              maxLength={1}
-              disabled={!isEditable}
-              autoFocus={index === currentIndex}
-              onFocus={() => setCurrentIndex(index)}
-              onChange={(event) => handleChange(index, event)}
-              onKeyDown={(event) => handleKeyDown(index, event)}
-            />
-              );
-            })()}
-          </div>
-        ))}
-      </div>
-      {hasWon ? <p className="game-status">You won!</p> : null}
-      {isGameOver ? (
-        <button type="button" className="reset-button" onClick={resetGame}>
-          Play Again
+      <header className="numble-header">
+        <div>
+          <p className="numble-kicker">Guess the hidden number</p>
+          <h1>NUMBLE</h1>
+        </div>
+        <button type="button" className="action-button action-secondary" onClick={handleLogout}>
+          Logout
         </button>
-      ) : null}
+      </header>
+
+      <section className="numble-panel">
+        <div className="numble-stats">
+          <p className="stat-pill">Attempts left: <strong>{attemptsLeft}</strong></p>
+          <p className="stat-pill">Digits: <strong>{rowSize}</strong></p>
+        </div>
+
+        <div className="grid">
+          {cells.map((_, index) => (
+            <div
+              key={index}
+              className={`grid-cell ${colors[index]} ${
+                animatingRow === Math.floor(index / rowSize) ? "reveal" : ""
+              } ${
+                revealedRows[Math.floor(index / rowSize)] ? "revealed" : ""
+              }`}
+              style={{
+                ["--reveal-delay" as string]: `${(index % rowSize) * revealStepMs}ms`,
+              }}
+            >
+              {(() => {
+                const row = Math.floor(index / rowSize);
+                const activeRow = Math.floor(currentIndex / rowSize);
+                const isEditable =
+                  row === activeRow && !submittedRows[row] && !isGameOver;
+
+                return (
+                  <input
+                    value={values[index]}
+                    inputMode="numeric"
+                    maxLength={1}
+                    disabled={!isEditable}
+                    autoFocus={index === currentIndex}
+                    onFocus={() => setCurrentIndex(index)}
+                    onChange={(event) => handleChange(index, event)}
+                    onKeyDown={(event) => handleKeyDown(index, event)}
+                  />
+                );
+              })()}
+            </div>
+          ))}
+        </div>
+
+        {hasWon ? <p className="game-status status-win">You won!</p> : null}
+        {!hasWon && isGameOver ? <p className="game-status status-lose">Game over. Target was {target}.</p> : null}
+        {isGameOver ? (
+          <button type="button" className="action-button" onClick={resetGame}>
+            Play Again
+          </button>
+        ) : null}
+      </section>
     </div>
   );
 }
