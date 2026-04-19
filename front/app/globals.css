@@ -47,7 +47,7 @@ body {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 12px;
-  width: min(680px, 60vw);
+  width: min(680px, 30vw);
   margin-top: 24px;
 }
 
@@ -126,7 +126,8 @@ body {
 }
 
 .reset-button {
-  margin-top: 12px;
+  display: block;
+  margin: 12px auto 0;
   padding: 10px 20px;
   border: 1px solid rgba(255, 255, 255, 0.55);
   border-radius: 10px;

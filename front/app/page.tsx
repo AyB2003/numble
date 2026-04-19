@@ -1,6 +1,6 @@
 "use client";
 
-import { type ChangeEvent, type KeyboardEvent, useState } ²from "react";
+import { type ChangeEvent, type KeyboardEvent, useState } from "react";
 
 export default function Home() {
   const rowSize = 6;
