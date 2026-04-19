@@ -1,0 +1,22 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: numble-backend
+    environment:
+      JWT_SECRET: dev-secret-change-me
+    ports:
+      - "3001:3001"
+
+  front:
+    build:
+      context: ./front
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:3001
+    container_name: numble-front
+    depends_on:
+      - backend
+    ports:
+      - "3000:3000"
