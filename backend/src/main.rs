@@ -25,6 +25,8 @@ async fn main() {
         .route("/auth/register", post(user::register))
         .route("/auth/login", post(user::login))
         .route("/auth/me", get(user::me))
+        .route("/scores/record", post(user::record_score))
+        .route("/scores/leaderboard", get(user::leaderboard))
         .layer(cors)
         .with_state(app_state);
 

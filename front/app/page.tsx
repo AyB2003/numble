@@ -4,6 +4,34 @@ import { useRouter } from "next/navigation";
 import { type ChangeEvent, type KeyboardEvent, useState } from "react";
 import { useEffect } from "react";
 
+type MeResponse = {
+  username: string;
+  score: number;
+  wins: number;
+  losses: number;
+  games_played: number;
+};
+
+type LeaderboardEntry = {
+  username: string;
+  score: number;
+  wins: number;
+  losses: number;
+  games_played: number;
+};
+
+type LeaderboardResponse = {
+  players: LeaderboardEntry[];
+};
+
+type ScoreUpdateResponse = {
+  username: string;
+  score: number;
+  wins: number;
+  losses: number;
+  games_played: number;
+};
+
 export default function Home() {
   const router = useRouter();
   const rowSize = 6;
@@ -28,8 +56,28 @@ export default function Home() {
   );
   const [isAuthorized, setIsAuthorized] = useState(false);
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+  const [username, setUsername] = useState("");
+  const [score, setScore] = useState(0);
+  const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
+  const [hasRecordedResult, setHasRecordedResult] = useState(false);
   const attemptsUsed = submittedRows.filter(Boolean).length;
   const attemptsLeft = totalRows - attemptsUsed;
+  const isGameOver = hasWon || submittedRows.every(Boolean);
+  const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
+
+  const fetchLeaderboard = async () => {
+    try {
+      const response = await fetch(`${apiBaseUrl}/scores/leaderboard`);
+      if (!response.ok) {
+        return;
+      }
+
+      const payload = (await response.json()) as LeaderboardResponse;
+      setLeaderboard(payload.players ?? []);
+    } catch {
+      setLeaderboard([]);
+    }
+  };
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -38,8 +86,6 @@ export default function Home() {
         router.replace("/login");
         return;
       }
-
-      const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
 
       try {
         const response = await fetch(`${apiBaseUrl}/auth/me`, {
@@ -54,6 +100,10 @@ export default function Home() {
           return;
         }
 
+        const payload = (await response.json()) as MeResponse;
+        setUsername(payload.username);
+        setScore(payload.score ?? 0);
+        await fetchLeaderboard();
         setIsAuthorized(true);
       } catch {
         localStorage.removeItem("numble_token");
@@ -64,9 +114,53 @@ export default function Home() {
     };
 
     checkAuth();
-  }, [router]);
+  }, [apiBaseUrl, router]);
 
-  const isGameOver = hasWon || submittedRows.every(Boolean);
+  useEffect(() => {
+    if (!isAuthorized || !isGameOver || hasRecordedResult) {
+      return;
+    }
+
+    const token = localStorage.getItem("numble_token");
+    if (!token) {
+      return;
+    }
+
+    let isCancelled = false;
+
+    const submitResult = async () => {
+      try {
+        const response = await fetch(`${apiBaseUrl}/scores/record`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ won: hasWon }),
+        });
+
+        if (!response.ok) {
+          return;
+        }
+
+        const payload = (await response.json()) as ScoreUpdateResponse;
+        if (!isCancelled) {
+          setScore(payload.score ?? 0);
+          await fetchLeaderboard();
+        }
+      } finally {
+        if (!isCancelled) {
+          setHasRecordedResult(true);
+        }
+      }
+    };
+
+    submitResult();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [apiBaseUrl, hasRecordedResult, hasWon, isAuthorized, isGameOver]);
 
   if (isCheckingAuth) {
     return (
@@ -96,6 +190,7 @@ export default function Home() {
     setRevealedRows(Array(totalRows).fill(false));
     setAnimatingRow(null);
     setHasWon(false);
+    setHasRecordedResult(false);
     setTarget(Math.floor(Math.random() * 1000000).toString().padStart(6, "0"));
   };
 
@@ -206,6 +301,7 @@ export default function Home() {
         <div>
           <p className="numble-kicker">Guess the hidden number</p>
           <h1>NUMBLE</h1>
+          <p className="player-greeting">Hello, {username || "Player"}</p>
         </div>
         <button type="button" className="action-button action-secondary" onClick={handleLogout}>
           Logout
@@ -213,45 +309,67 @@ export default function Home() {
       </header>
 
       <section className="numble-panel">
-        <div className="numble-stats">
-          <p className="stat-pill">Attempts left: <strong>{attemptsLeft}</strong></p>
-          <p className="stat-pill">Digits: <strong>{rowSize}</strong></p>
-        </div>
-
-        <div className="grid">
-          {cells.map((_, index) => (
-            <div
-              key={index}
-              className={`grid-cell ${colors[index]} ${
-                animatingRow === Math.floor(index / rowSize) ? "reveal" : ""
-              } ${
-                revealedRows[Math.floor(index / rowSize)] ? "revealed" : ""
-              }`}
-              style={{
-                ["--reveal-delay" as string]: `${(index % rowSize) * revealStepMs}ms`,
-              }}
-            >
-              {(() => {
-                const row = Math.floor(index / rowSize);
-                const activeRow = Math.floor(currentIndex / rowSize);
-                const isEditable =
-                  row === activeRow && !submittedRows[row] && !isGameOver;
-
-                return (
-                  <input
-                    value={values[index]}
-                    inputMode="numeric"
-                    maxLength={1}
-                    disabled={!isEditable}
-                    autoFocus={index === currentIndex}
-                    onFocus={() => setCurrentIndex(index)}
-                    onChange={(event) => handleChange(index, event)}
-                    onKeyDown={(event) => handleKeyDown(index, event)}
-                  />
-                );
-              })()}
+        <div className="game-shell">
+          <div>
+            <div className="numble-stats">
+              <p className="stat-pill">Attempts left: <strong>{attemptsLeft}</strong></p>
+              <p className="stat-pill">Digits: <strong>{rowSize}</strong></p>
+              <p className="stat-pill">Score: <strong>{score}</strong></p>
             </div>
-          ))}
+
+            <div className="grid">
+              {cells.map((_, index) => (
+                <div
+                  key={index}
+                  className={`grid-cell ${colors[index]} ${
+                    animatingRow === Math.floor(index / rowSize) ? "reveal" : ""
+                  } ${
+                    revealedRows[Math.floor(index / rowSize)] ? "revealed" : ""
+                  }`}
+                  style={{
+                    ["--reveal-delay" as string]: `${(index % rowSize) * revealStepMs}ms`,
+                  }}
+                >
+                  {(() => {
+                    const row = Math.floor(index / rowSize);
+                    const activeRow = Math.floor(currentIndex / rowSize);
+                    const isEditable =
+                      row === activeRow && !submittedRows[row] && !isGameOver;
+
+                    return (
+                      <input
+                        value={values[index]}
+                        inputMode="numeric"
+                        maxLength={1}
+                        disabled={!isEditable}
+                        autoFocus={index === currentIndex}
+                        onFocus={() => setCurrentIndex(index)}
+                        onChange={(event) => handleChange(index, event)}
+                        onKeyDown={(event) => handleKeyDown(index, event)}
+                      />
+                    );
+                  })()}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <aside className="leaderboard-panel" aria-label="Leaderboard">
+            <h2>Leaderboard</h2>
+            {leaderboard.length === 0 ? (
+              <p className="leaderboard-empty">No scores yet</p>
+            ) : (
+              <ol className="leaderboard-list">
+                {leaderboard.map((player, index) => (
+                  <li key={player.username} className="leaderboard-item">
+                    <span className="leader-rank">#{index + 1}</span>
+                    <span className="leader-name">{player.username}</span>
+                    <span className="leader-score">{player.score}</span>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </aside>
         </div>
 
         {hasWon ? <p className="game-status status-win">You won!</p> : null}

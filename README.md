@@ -48,6 +48,8 @@ npm run dev
 - `POST /auth/register`
 - `POST /auth/login`
 - `GET /auth/me` (requires `Authorization: Bearer <token>`)
+- `POST /scores/record` (requires `Authorization: Bearer <token>`, body: `{ "won": true|false }`)
+- `GET /scores/leaderboard`
 
 ## Quick API test (PowerShell)
 
@@ -80,3 +82,5 @@ Invoke-RestMethod -Method Get -Uri http://localhost:3001/auth/me `
 - Users are stored in a persistent sled database.
 - Use `DB_PATH` to choose where user data is stored.
 - In Docker, user data is persisted in the `backend-data` volume.
+- Each finished game updates player stats and score.
+- Leaderboard returns the top 10 players sorted by score.

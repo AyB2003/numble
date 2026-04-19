@@ -80,6 +80,7 @@ dependencies = [
  "bcrypt",
  "jsonwebtoken",
  "serde",
+ "serde_json",
  "sled",
  "tokio",
  "tower-http",
