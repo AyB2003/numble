@@ -90,6 +90,11 @@ export default function Home() {
     setTarget(Math.floor(Math.random() * 1000000).toString().padStart(6, "0"));
   };
 
+  const handleLogout = () => {
+    localStorage.removeItem("numble_token");
+    router.replace("/login");
+  };
+
   const handleChange = (index: number, event: ChangeEvent<HTMLInputElement>) => {
     const activeRow = Math.floor(currentIndex / rowSize);
     const row = Math.floor(index / rowSize);
@@ -189,6 +194,9 @@ export default function Home() {
   return (
     <div className="main-layout">
       <h1>NUMBLE</h1>
+      <button type="button" className="reset-button" onClick={handleLogout}>
+        Logout
+      </button>
       <div className="grid">
         {cells.map((_, index) => (
           <div
