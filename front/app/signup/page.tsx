@@ -4,10 +4,6 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useMemo, useState } from "react";
 
-type LoginResponse = {
-  access_token: string;
-  token_type: string;
-};
 
 type ErrorResponse = {
   error?: string;

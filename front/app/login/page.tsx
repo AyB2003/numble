@@ -118,7 +118,7 @@ export default function LoginPage() {
         </form>
 
         <p className="mt-5 text-xs text-zinc-400">
-          Don't have an account? <Link href="/signup" className="underline">Sign Up</Link>
+          Don t have an account ? <Link href="/signup" className="underline">Sign Up</Link>
         </p>
       </div>
     </main>
