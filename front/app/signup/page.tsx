@@ -36,7 +36,7 @@ export default function LoginPage() {
     setErrorMessage(null);
 
     try {
-      const response = await fetch(`${apiBaseUrl}/auth/login`, {
+      const response = await fetch(`${apiBaseUrl}/auth/register`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -51,13 +51,11 @@ export default function LoginPage() {
         const errorPayload = (await response.json().catch(() => null)) as
           | ErrorResponse
           | null;
-        setErrorMessage(errorPayload?.error ?? "Login failed.");
+        setErrorMessage(errorPayload?.error ?? "Sign Up failed.");
         return;
       }
 
-      const payload = (await response.json()) as LoginResponse;
-      localStorage.setItem("numble_token", payload.access_token);
-      router.push("/");
+      router.push("/login");
     } catch {
       setErrorMessage("Unable to reach backend. Check if it is running.");
     } finally {
@@ -68,7 +66,7 @@ export default function LoginPage() {
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-md flex-col justify-center px-6 py-10">
       <div className="rounded-2xl border border-white/20 bg-black/30 p-6 shadow-lg backdrop-blur">
-        <h1 className="text-3xl font-semibold tracking-wide text-white">Login</h1>
+        <h1 className="text-3xl font-semibold tracking-wide text-white">Sign Up</h1>
         <p className="mt-2 text-sm text-zinc-300">
           Sign in to play Numble.
         </p>
@@ -113,12 +111,12 @@ export default function LoginPage() {
             disabled={isSubmitting}
             className="w-full rounded-lg border border-white/40 bg-white/10 px-4 py-2 font-medium text-white transition hover:bg-white/20"
           >
-            {isSubmitting ? "Signing in..." : "Sign in"}
+            {isSubmitting ? "Signing up..." : "Sign up"}
           </button>
         </form>
 
         <p className="mt-5 text-xs text-zinc-400">
-          Don't have an account? <Link href="/signup" className="underline">Sign Up</Link>
+          Already have an account? <Link href="/login" className="underline">Login</Link>
         </p>
       </div>
     </main>
